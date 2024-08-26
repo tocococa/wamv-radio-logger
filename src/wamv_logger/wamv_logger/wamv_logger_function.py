@@ -37,7 +37,7 @@ class OdomAndRadioLogger(Node):
         ]
         self.subscription = self.create_subscription(
             Odometry,
-            "/ekf/odometry_map"
+            "/ekf/odometry_map",
             self.logger_callback,
             10)
         self.subscription
