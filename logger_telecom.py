@@ -71,6 +71,7 @@ class Logger():
     def ssh_exec(self, cmd: str) -> str:
         ssh = self.ssh_connect()
         _, stdout, _ = ssh.exec_command(cmd)
+        ssh.close()
         return stdout.read().decode()
     
     def gather_data(self, cmd: str, echo: bool=False) -> None:
@@ -97,8 +98,8 @@ class Logger():
 
 
 if __name__ == '__main__':
-    logger_base = Logger('logs_base.csv', 'ubnt', 'ubntbase', '192.168.1.21')
-    logger_wamv = Logger('logs_wamv.csv', 'ubnt', 'ubntwamv', '192.168.1.20')
+    logger_base = Logger('logs_base.csv', '--', '--', '--')
+    logger_wamv = Logger('logs_wamv.csv', '--', '--', '--')
     n = 0
     while True:
         n += 1
