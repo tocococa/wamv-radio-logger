@@ -13,20 +13,24 @@
 # limitations under the License.
 
 import rclpy
-import time
-import paramiko
-
-import pandas as pd
-import re
-
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from sensor_msgs.msg import NavSatFix
+
+import time
+import re
+import os
+import threading
+
+import paramiko
+import pandas as pd
 
 class OdomAndRadioLogger(Node):
 
-    def __init__(self, fptah: str, usr: str, pwd: str, ip_addr: str, port: int=22) -> None:
+    def __init__(self, fpath: str, usr: str, pwd: str, ip_addr: str, port: int=22) -> None:
         super().__init__('odom_and_radio_logger')
-        self.fptah = fptah
+        self.fpath = fpath
         self.user = usr
         self.pwd = pwd
         self.ip = ip_addr
@@ -35,33 +39,50 @@ class OdomAndRadioLogger(Node):
             'time', 'frequency', 'bit_rate', 'tx_power', 'link_quality',
             'signal_level', 'noise_level', 'lat', 'lon', 'heading'
         ]
-        self.subscription = self.create_subscription(
-            Odometry,
-            "/ekf/odometry_map",
+        self.temp_data = {"heading": None, "llh": None, "radio": None}
+        self.subscription_1 = self.create_subscription(
+            NavSatFix,
+            "/wamv/sensors/gps/gps/fix",
             self.logger_callback,
             10)
-        self.subscription
+        self.subscription_1
 
-    def logger_callback(self, msg: Odometry) -> None:
+    def logger_callback(self, msg: NavSatFix, echo: bool=True) -> None:
         # what are this in? lat-lon degrees?
         callback_time = time.time()
-        pos_x, pos_y = msg.pose.pose.position.x, msg.pose.pose.position.y
-        rotation = msg.pose.pose.orientation
-        data_dict = query_radio()
+        if (echo):
+            print(f"Callback time init: {msg}")
+        pos_x, pos_y = msg.latitude, msg.longitude
+        #rotation = msg.pose.pose.orientation
+        #data_dict = self.query_radio()
+        data_dict = dict()
         query_time = time.time()
         timestamp = (callback_time + query_time)/2
         if data_dict:
             data_dict['lat'] = pos_x
             data_dict['lon'] = pos_y
-            data_dict['heading'] = rotation
+            #data_dict['heading'] = rotation
             data_dict['time'] = timestamp
         else:
-            data_dict = {k: None for k in elf.columns}
+            data_dict = {k: None for k in self.columns}
             data_dict['lat'] = pos_x
             data_dict['lon'] = pos_y
-            data_dict['heading'] = rotation
+            #data_dict['heading'] = rotation
             data_dict['time'] = timestamp
+        if (echo): print(data_dict)
         self.store_data(data_dict)
+    
+    # ref:
+    # https://wiki.ros.org/microstrain_inertial_driver#Publishers
+    def llh_position_callback(self, msg: NavSatFix) -> None:
+        # subscribe to /ekf/llh_position
+        # log lat, lon, altitude
+        pass
+
+    def ekf_antenna_heading(self, msg: PoseWithCovarianceStamped) -> None:
+        # subscribe to /ekf/dual_antenna_heading
+        # pose.pose.orientation gets the Z axis orientation in rads
+        pass
 
     
     def parseRadioData(self, msg_data: str) -> dict:
@@ -117,19 +138,19 @@ class OdomAndRadioLogger(Node):
         return stdout.read().decode()
     
     def store_data(self, row_data: dict):
-        if os.path.exists(self.fptah):
-            data_frame = pd.read(self.fpath)
+        if os.path.exists(self.fpath):
+            data_frame = pd.read_csv(self.fpath)
         else:
             data_frame = pd.DataFrame(columns=self.columns)
-        data_frame = pd.concat([data_frame, pd.DataFrame(msg, index=[0])], ignore_index=True)
-        data_frame.to_csv(self.fptah, index=False)
+        data_frame = pd.concat([data_frame, pd.DataFrame(row_data, index=[0])], ignore_index=True)
+        data_frame.to_csv(self.fpath, index=False)
 
 
 
-def main(args=None):
+def main(args=None) -> None:
     try:
         with open('secrets.txt', mode="r") as f:
-            user, passkey, ipaddr = f.readline().spplit(";")
+            user, passkey, ipaddr = f.readline().split(";")
     except FileNotFoundError as e:
         print(f"{e}, you might have forgotten the secrets.txt file")
         print("Format is <user;passkey;ipaddr>")
