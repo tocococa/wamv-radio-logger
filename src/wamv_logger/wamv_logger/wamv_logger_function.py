@@ -28,24 +28,42 @@ import pandas as pd
 
 class OdomAndRadioLogger(Node):
 
-    def __init__(self, fpath: str, usr: str, pwd: str, ip_addr: str, port: int=22) -> None:
+    def __init__(self, usr: str, pwd: str, ip_addr: str, port: int=22) -> None:
         super().__init__('odom_and_radio_logger')
-        self.fpath = fpath
+        self.radiolog_path = "radio_logs.csv"
+        self.llhlog_path = "llh_logs.csv"
+        self.hdnlog_path = "hdn_logs.csv"
         self.user = usr
         self.pwd = pwd
         self.ip = ip_addr
         self.port = port
-        self.columns = [
+        self.radio_cols = [
             'time', 'frequency', 'bit_rate', 'tx_power', 'link_quality',
-            'signal_level', 'noise_level', 'lat', 'lon', 'heading'
-        ]
-        self.temp_data = {"heading": None, "llh": None, "radio": None}
-        self.subscription_1 = self.create_subscription(
+            'signal_level', 'noise_level',]
+        self.llg_cols = ['time', 'lat', 'lon', 'alt']
+        self.hdn_cols = ['time', 'hdn']
+        # self.subscription_1 = self.create_subscription(
+        #     NavSatFix,
+        #     "/wamv/sensors/gps/gps/fix",
+        #     self.logger_callback,
+        #     10)
+        # self.subscription_1
+
+        self.llh_sub = self.create_subscription(
             NavSatFix,
-            "/wamv/sensors/gps/gps/fix",
-            self.logger_callback,
-            10)
-        self.subscription_1
+            "/ekf/llh_position",
+            self.llh_position_callback,
+            10
+        )
+        self.llh_sub
+
+        self.hdn_sub = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/ekf/dual_antenna_heading",
+            self.ekf_antenna_heading,
+            10
+        )
+        self.hdn_sub
 
     def logger_callback(self, msg: NavSatFix, echo: bool=True) -> None:
         # what are this in? lat-lon degrees?
@@ -64,7 +82,7 @@ class OdomAndRadioLogger(Node):
             #data_dict['heading'] = rotation
             data_dict['time'] = timestamp
         else:
-            data_dict = {k: None for k in self.columns}
+            data_dict = {k: None for k in self.radio_cols}
             data_dict['lat'] = pos_x
             data_dict['lon'] = pos_y
             #data_dict['heading'] = rotation
@@ -77,12 +95,22 @@ class OdomAndRadioLogger(Node):
     def llh_position_callback(self, msg: NavSatFix) -> None:
         # subscribe to /ekf/llh_position
         # log lat, lon, altitude
-        pass
+        lat = msg.latitude
+        lon = msg.longitude
+        alt = msg.altitude
+        llh_data = {
+            'time': time.time(), 'lat': lat, 'lon': lon, 'alt': alt
+        }
+        self.store_data(self.llhlog_path, self.llg_cols, llh_data)
+        
 
     def ekf_antenna_heading(self, msg: PoseWithCovarianceStamped) -> None:
         # subscribe to /ekf/dual_antenna_heading
         # pose.pose.orientation gets the Z axis orientation in rads
-        pass
+        heading = msg.pose.pose.orientation.z
+        heading_data = {'time': time.time(), 'heading': heading}
+        self.store_data(self.hdnlog_path, self.hdn_cols, heading_data)
+        self.query_radio()
 
     
     def parseRadioData(self, msg_data: str) -> dict:
@@ -112,22 +140,10 @@ class OdomAndRadioLogger(Node):
 
         temp_dict = {key: match.group(1) if match else None for key, match in fields.items()}
         formatted_dict = dict()
-        for elem in self.columns:
+        for elem in self.radio_cols:
             formatted_dict[elem] = temp_dict[elem]
         return formatted_dict
     
-    def query_radio(self, echo: bool=False) -> dict:
-        try:
-            cmd_data = self.ssh_exec("iwconfig")
-            msg_dict = self.parse(cmd_data)
-            if echo:
-                print(msg_dict)
-    
-            return msg_dict
-        except paramiko.ssh_exception.SSHException:
-            print(f'SSH connection for {self.ip} failed, skipping.')
-            return None
-
     def ssh_exec(self, cmd: str) -> str:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -137,13 +153,24 @@ class OdomAndRadioLogger(Node):
         ssh.close()
         return stdout.read().decode()
     
-    def store_data(self, row_data: dict):
-        if os.path.exists(self.fpath):
-            data_frame = pd.read_csv(self.fpath)
+    def query_radio(self, echo: bool=False) -> None:
+        try:
+            cmd_data = self.ssh_exec("iwconfig")
+            msg_dict = self.parseRadioData(cmd_data)
+            if echo:
+                print(msg_dict)
+    
+            self.store_data(self.radiolog_path, msg_dict, self.radio_cols)
+        except paramiko.ssh_exception.SSHException:
+            print(f'SSH connection for {self.ip} failed, skipping.')
+
+    def store_data(self, fpath: str, row_data: dict, cols: list):
+        if os.path.exists(fpath):
+            data_frame = pd.read_csv(fpath)
         else:
-            data_frame = pd.DataFrame(columns=self.columns)
+            data_frame = pd.DataFrame(columns=cols)
         data_frame = pd.concat([data_frame, pd.DataFrame(row_data, index=[0])], ignore_index=True)
-        data_frame.to_csv(self.fpath, index=False)
+        data_frame.to_csv(fpath, index=False)
 
 
 
@@ -158,7 +185,7 @@ def main(args=None) -> None:
 
     rclpy.init(args=args)
 
-    odom_and_radio_logger = OdomAndRadioLogger("logs_wamv.csv", user, passkey, ipaddr)
+    odom_and_radio_logger = OdomAndRadioLogger(user, passkey, ipaddr)
 
     rclpy.spin(odom_and_radio_logger)
 
