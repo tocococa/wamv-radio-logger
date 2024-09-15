@@ -21,18 +21,23 @@ from sensor_msgs.msg import NavSatFix
 import time
 import re
 import os
-import threading
+#import threading
 
 import paramiko
-import pandas as pd
+#import pandas as pd
+import csv
 
 class OdomAndRadioLogger(Node):
 
     def __init__(self, usr: str, pwd: str, ip_addr: str, port: int=22) -> None:
         super().__init__('odom_and_radio_logger')
-        self.radiolog_path = "radio_logs.csv"
-        self.llhlog_path = "llh_logs.csv"
-        self.hdnlog_path = "hdn_logs.csv"
+        pid = os.getpid()
+        out_dir = f'logs_{pid}'
+        os.makedirs(out_dir, exist_ok=True)
+        print(f'[INFO] Writing data to {os.getcwd()}/{out_dir}')
+        self.radiolog_path = f"{out_dir}/radio_logs.csv"
+        self.llhlog_path = f"{out_dir}/llh_logs.csv"
+        self.hdnlog_path = f"{out_dir}/hdn_logs.csv"
         self.user = usr
         self.pwd = pwd
         self.ip = ip_addr
@@ -59,7 +64,7 @@ class OdomAndRadioLogger(Node):
 
         self.hdn_sub = self.create_subscription(
             PoseWithCovarianceStamped,
-            "/ekf/dual_antenna_heading",
+            "/ekf/odometry_map",
             self.ekf_antenna_heading,
             10
         )
@@ -101,16 +106,22 @@ class OdomAndRadioLogger(Node):
         llh_data = {
             'time': time.time(), 'lat': lat, 'lon': lon, 'alt': alt
         }
-        self.store_data(self.llhlog_path, self.llg_cols, llh_data)
-        
+        #print(msg)
+        self.store_data(self.llhlog_path, llh_data, self.llg_cols)
+        self.query_radio()
+        time.sleep(1)
 
     def ekf_antenna_heading(self, msg: PoseWithCovarianceStamped) -> None:
         # subscribe to /ekf/dual_antenna_heading
-        # pose.pose.orientation gets the Z axis orientation in rads
-        heading = msg.pose.pose.orientation.z
-        heading_data = {'time': time.time(), 'heading': heading}
-        self.store_data(self.hdnlog_path, self.hdn_cols, heading_data)
-        self.query_radio()
+        # pose.pose.orientation. gets the Z axis orientation in rads
+        # or just write pose.pose.orienteation if
+        # subscribed to /ekf/odometry_mapß
+        #heading = msg.pose.pose.orientation.z
+        heading = msg.pose.pose
+        print(heading)
+        heading_data = {'time': time.time(), 'heading': msg}
+        self.store_data(self.hdnlog_path, heading_data, self.hdn_cols)
+        #self.query_radio()
 
     
     def parseRadioData(self, msg_data: str) -> dict:
@@ -140,6 +151,7 @@ class OdomAndRadioLogger(Node):
 
         temp_dict = {key: match.group(1) if match else None for key, match in fields.items()}
         formatted_dict = dict()
+        temp_dict['time'] = time.time()
         for elem in self.radio_cols:
             formatted_dict[elem] = temp_dict[elem]
         return formatted_dict
@@ -147,9 +159,10 @@ class OdomAndRadioLogger(Node):
     def ssh_exec(self, cmd: str) -> str:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(self.ip, self.port, self.user, self.pwd, banner_timeout=200)
-        ssh = self.ssh_connect()
+        ssh.connect(self.ip.strip(), self.port, self.user, self.pwd, banner_timeout=200)
+        #ssh = self.ssh_connect()
         _, stdout, _ = ssh.exec_command(cmd)
+        #print(f"stderr: {stderr.read().decode()}")
         ssh.close()
         return stdout.read().decode()
     
@@ -161,16 +174,26 @@ class OdomAndRadioLogger(Node):
                 print(msg_dict)
     
             self.store_data(self.radiolog_path, msg_dict, self.radio_cols)
+            #print("Radio data:")
+            #print(msg_dict)
         except paramiko.ssh_exception.SSHException:
             print(f'SSH connection for {self.ip} failed, skipping.')
 
     def store_data(self, fpath: str, row_data: dict, cols: list):
         if os.path.exists(fpath):
-            data_frame = pd.read_csv(fpath)
+            with open(fpath, 'r') as file:
+                reader = csv.DictReader(file)
+                data_frame = list(reader)
         else:
-            data_frame = pd.DataFrame(columns=cols)
-        data_frame = pd.concat([data_frame, pd.DataFrame(row_data, index=[0])], ignore_index=True)
-        data_frame.to_csv(fpath, index=False)
+            data_frame = []
+        data_frame.append(row_data)
+        fieldnames = cols
+        with open(fpath, 'w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(data_frame)
+        #data_frame.to_csv(fpath, index=False)
+        print(f"[INFO] Data saved to {fpath}")
 
 
 
@@ -178,6 +201,7 @@ def main(args=None) -> None:
     try:
         with open('secrets.txt', mode="r") as f:
             user, passkey, ipaddr = f.readline().split(";")
+            print(f"[INFO] User: {user}, IP: {ipaddr}")
     except FileNotFoundError as e:
         print(f"{e}, you might have forgotten the secrets.txt file")
         print("Format is <user;passkey;ipaddr>")
