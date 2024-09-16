@@ -35,8 +35,7 @@ class OdomAndRadioLogger(Node):
         out_dir = f'logs_{pid}'
         os.makedirs(out_dir, exist_ok=True)
         print(f'[INFO] Writing data to {os.getcwd()}/{out_dir}')
-        self.radiwcfg_path = f"{out_dir}/radio_logs_iwcfg.csv"
-        self.radiomca_path = f"{out_dir}/radio_logs_mca.csv"
+        self.radiolog_path = f"{out_dir}/radio_logs.csv"
         self.llhlog_path = f"{out_dir}/llh_logs.csv"
         self.hdnlog_path = f"{out_dir}/hdn_logs.csv"
         self.user = usr
@@ -48,10 +47,6 @@ class OdomAndRadioLogger(Node):
             'signal_level', 'noise_level',]
         self.llg_cols = ['time', 'lat', 'lon', 'alt']
         self.hdn_cols = ['time', 'hdn']
-        self.mca_cols = ['time', 'rxbytes', 'txbytes', 'frequency', 'centerfreq', 'chanbw', "rxbw", "txbw"]
-        self.mca_last_rxb = int()
-        self.mca_last_txb = int()
-        self.mca_last_time = int()
         # self.subscription_1 = self.create_subscription(
         #     NavSatFix,
         #     "/wamv/sensors/gps/gps/fix",
@@ -127,36 +122,9 @@ class OdomAndRadioLogger(Node):
         heading_data = {'time': time.time(), 'heading': msg}
         self.store_data(self.hdnlog_path, heading_data, self.hdn_cols)
         #self.query_radio()
-    
-    def parseMcaStatusData(self, msg_data: str) -> dict:
-        fields = {
-            "rxbytes": re.search(r"wlanRxBytes=(\d+)", msg_data),
-            "txbytes": re.search(r"wlanTxBytes=(\d+)", msg_data),
-            "frequency": re.search(r"freq=([\d.]+ \w+)", msg_data),
-            "centerfreq": re.search(r"centerFreq=([\d.]+ \w+)", msg_data),
-            "chanbw": re.search(r"chanbw=([\d.]+ \w+)", msg_data),
-        }
-        temp_dict = {key: match.group(1) if match else None for key, match in fields.items()}
-        formatted_dict = dict()
-        temp_dict['time'] = time.time()
-        temp_dict['rxbw'] = 0
-        temp_dict['txbw'] = 0
-        for elem in self.mca_cols:
-            formatted_dict[elem] = temp_dict[elem]
-        return formatted_dict
 
-    def estimateThorughput(self, mca_dict: dict) -> dict:
-        current_time = mca_dict['time']
-        current_rx = int(mca_dict['rxbytes'])
-        current_tx = int(mca_dict['txbytes'])
-        est_rx = (current_rx - self.mca_last_rxb) / (current_time - self.mca_last_time)
-        self.mca_last_rxb = current_rx
-        est_tx = (current_tx - self.mca_last_txb) / (current_time - self.mca_last_time)
-        self.mca_last_txb = current_tx
-        self.mca_last_time = current_time
-        return {"rxbw": est_rx, "txbw": est_tx}
 
-    def parseIwConfigData(self, msg_data: str) -> dict:
+    def parseRadioData(self, msg_data: str) -> dict:
         fields = {
             "protocol": re.search(r"IEEE ([\w.]+)", msg_data),
             "essid": re.search(r'ESSID:"([^"]+)"', msg_data),
@@ -200,22 +168,13 @@ class OdomAndRadioLogger(Node):
     def query_radio(self, echo: bool=False) -> None:
         try:
             cmd_data = self.ssh_exec("/usr/bin/iwconfig")
-            # mca-status
-            msg_dict = self.parseIwConfigData(cmd_data)
+            msg_dict = self.parseRadioData(cmd_data)
             if echo:
                 print(msg_dict)
 
-            self.store_data(self.radiwcfg_path, msg_dict, self.radio_cols)
+            self.store_data(self.radiolog_path, msg_dict, self.radio_cols)
             #print("Radio data:")
             #print(msg_dict)
-            cmd_data = self.ssh_exec("/usr/bin/mca-status")
-            msg_dict = self.parseMcaStatusData(cmd_data)
-            if echo:
-                print(msg_dict)
-            throughput_data = self.estimateThorughput(msg_dict)
-            msg_dict.update(throughput_data)
-            self.store_data(self.radiomca_path, msg_dict, self.mca_cols)
-
         except paramiko.ssh_exception.SSHException:
             print(f'SSH connection for {self.ip} failed, skipping.')
 
@@ -233,7 +192,7 @@ class OdomAndRadioLogger(Node):
             writer.writeheader()
             writer.writerows(data_frame)
         #data_frame.to_csv(fpath, index=False)
-        print(f"[INFO] Data saved to {fpath}")
+        #print(f"[INFO] Data saved to {fpath}")
 
 
 
