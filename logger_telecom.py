@@ -20,6 +20,8 @@ class Logger():
         self.mca_last_time = int()
     
     def parseMcaStatusData(self, msg_data: str) -> dict:
+        # mca-status is a propietary command from Ubiquiti
+        # see mca-status.txt for and example of the output.
         fields = {
             "rxbytes": re.search(r"wlanRxBytes=(\d+)", msg_data),
             "txbytes": re.search(r"wlanTxBytes=(\d+)", msg_data),
@@ -82,17 +84,12 @@ class Logger():
 
     
     def log(self, msg: dict, cols: list) -> None:
-        # open csv file using pandas
         if os.path.exists(self.fptah):
             data_frame = pd.read_csv(self.fptah)
         else:
             data_frame = pd.DataFrame(columns=cols)
-        # append new data to the csv file
-        # using dict to map the data to the columns
-        # get unix time
         msg['time'] = time.time()
         data_frame = pd.concat([data_frame, pd.DataFrame(msg, index=[0])], ignore_index=True)
-        # save the new data to the csv file
         data_frame.to_csv(self.fptah, index=False)
 
     def ssh_connect(self) -> None:
