@@ -27,6 +27,8 @@ import paramiko
 #import pandas as pd
 import csv
 
+DEBUG = True
+
 class OdomAndRadioLogger(Node):
 
     def __init__(self, usr: str, pwd: str, ip_addr: str, port: int=22) -> None:
@@ -47,8 +49,8 @@ class OdomAndRadioLogger(Node):
             'time', 'frequency', 'bit_rate', 'tx_power', 'link_quality',
             'signal_level', 'noise_level',]
         self.llg_cols = ['time', 'lat', 'lon', 'alt']
-        self.hdn_cols = ['time', 'hdn']
-        self.mca_cols = ['time', 'rxbytes', 'txbytes', 'frequency', 'centerfreq', 'chanbw', "rxbw", "txbw"]
+        self.hdn_cols = ['time', 'heading']
+        self.mca_cols = ['time', 'rxbytes', 'txbytes', 'frequency', 'centerfreq', 'chanbw', 'txpwr', 'rxbw', 'txbw', 'signal', 'noise']
         self.mca_last_rxb = int()
         self.mca_last_txb = int()
         self.mca_last_time = int()
@@ -69,7 +71,7 @@ class OdomAndRadioLogger(Node):
 
         self.hdn_sub = self.create_subscription(
             PoseWithCovarianceStamped,
-            "/ekf/odometry_map",
+            "/ekf/dual_antenna_heading",
             self.ekf_antenna_heading,
             10
         )
@@ -121,10 +123,11 @@ class OdomAndRadioLogger(Node):
         # pose.pose.orientation. gets the Z axis orientation in rads
         # or just write pose.pose.orienteation if
         # subscribed to /ekf/odometry_map
-        #heading = msg.pose.pose.orientation.z
-        heading = msg.pose.pose
-        print(heading)
-        heading_data = {'time': time.time(), 'heading': msg}
+        heading = msg.pose.pose.orientation.z
+        #heading = msg.pose.pose
+        if DEBUG:
+            print(f"[DEBUG] Heading data: {heading}")
+        heading_data = {'time': time.time(), 'heading': heading}
         self.store_data(self.hdnlog_path, heading_data, self.hdn_cols)
         #self.query_radio()
     
@@ -132,9 +135,12 @@ class OdomAndRadioLogger(Node):
         fields = {
             "rxbytes": re.search(r"wlanRxBytes=(\d+)", msg_data),
             "txbytes": re.search(r"wlanTxBytes=(\d+)", msg_data),
-            "frequency": re.search(r"freq=([\d.]+ \w+)", msg_data),
-            "centerfreq": re.search(r"centerFreq=([\d.]+ \w+)", msg_data),
-            "chanbw": re.search(r"chanbw=([\d.]+ \w+)", msg_data),
+            "frequency": re.search(r"freq=(\d+)", msg_data),
+            "centerfreq": re.search(r"centerFreq=(\d+)", msg_data),
+            "chanbw": re.search(r"chanbw=(\d+)", msg_data),
+            "txpwr" : re.search(r"txPower=(\d+)", msg_data),
+            "signal": re.search(r"signal=-(\d+)", msg_data),
+            "noise": re.search(r"noise=-(\d+)", msg_data), 	
         }
         temp_dict = {key: match.group(1) if match else None for key, match in fields.items()}
         formatted_dict = dict()
@@ -193,14 +199,19 @@ class OdomAndRadioLogger(Node):
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(self.ip.strip(), self.port, self.user, self.pwd, banner_timeout=200)
         #ssh = self.ssh_connect()
-        _, stdout, _ = ssh.exec_command(cmd)
+        _, stdout, stderr = ssh.exec_command(cmd)
+        out = stdout.read().decode()
+        if DEBUG:
+            print(f"[DEBUG] stderr: {stderr.read().decode()}")
+            print(f"[DEBUG] stdout: {out}")
         ssh.close()
-        return stdout.read().decode()
+        return out
 
     def query_radio(self, echo: bool=False) -> None:
         try:
             cmd_data = self.ssh_exec("/usr/bin/iwconfig")
-            # mca-status
+            if DEBUG:
+                print(f"[DEBUG] Radio data: {cmd_data}")
             msg_dict = self.parseIwConfigData(cmd_data)
             if echo:
                 print(msg_dict)
@@ -209,6 +220,8 @@ class OdomAndRadioLogger(Node):
             #print("Radio data:")
             #print(msg_dict)
             cmd_data = self.ssh_exec("/usr/bin/mca-status")
+            if DEBUG:
+                print(f"[DEBUG] MCA data: {cmd_data}")
             msg_dict = self.parseMcaStatusData(cmd_data)
             if echo:
                 print(msg_dict)
